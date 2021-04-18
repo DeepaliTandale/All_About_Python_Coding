@@ -15,6 +15,7 @@ def divide(a,b):
     return a//b
 
 #divi = decorator_example(divide)
+#divi()
 print(divide(4,16))
 
 # def plus_one(number):
