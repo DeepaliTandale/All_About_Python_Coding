@@ -1,0 +1,89 @@
+Name: Workflow_3b09
+SchemaVersion: "1.0"
+
+# Set automatic triggers.
+Triggers:
+  - Type: PUSH
+    Branches:
+      - main
+  - Type: PULLREQUEST
+    Branches:
+      - main
+    Events:
+      - OPEN     # Trigger when a pull request is opened.
+      - REVISION # Trigger when a pull request is updated with new commits.
+      - CLOSED   # Trigger when a pull request is closed or merged.
+
+Actions:
+  Build_Frontend:
+    Identifier: BuildFrontend 
+    ActionType: CodeBuild
+    Inputs:
+      BuildspecOverride: |
+        version: 0.2
+        phases:
+          install:
+            runtime-versions:
+              nodejs: 16
+            commands:
+              - echo "Installing dependencies..."
+              - npm install
+          build:
+            commands:
+              - echo "Building the frontend..."
+              - npm run build
+        artifacts:
+          files:
+            - '**/*'
+      EnvironmentVariables:
+        NODE_ENV: production
+        S3_BUCKET: ${{ if "ENV" == "prod" then "your-frontend-bucket-prod" else "your-frontend-bucket-dev" }}
+      ComputeType: BUILD_GENERAL1_SMALL
+      Image: "aws/codebuild/standard:6.0"
+
+  Deploy_Frontend:
+    ActionType: S3Deploy
+    Inputs:
+      SourceArtifacts:
+        - Name: Build_Frontend.Artifacts
+      BucketName: ${{ if "ENV" == "prod" then "your-frontend-bucket-prod" else "your-frontend-bucket-dev" }}
+      DestinationKeyPrefix: ""
+      CacheControl: "max-age=0, no-cache, no-store, must-revalidate"
+
+  Build_Backend:
+    ActionType: CodeBuild
+    Inputs:
+      BuildspecOverride: |
+        version: 0.2
+        phases:
+          install:
+            runtime-versions:
+              java: corretto11
+            commands:
+              - echo "Building Java application..."
+              - ./gradlew clean build
+          build:
+            commands:
+              - echo "Building Docker image..."
+              - docker build -t ${IMAGE_TAG} .
+              - docker tag ${IMAGE_TAG} ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}:${IMAGE_TAG}
+              - docker push ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}:${IMAGE_TAG}
+        artifacts:
+          files:
+            - 'target/*.jar'
+      EnvironmentVariables:
+        IMAGE_TAG: ${{ GitHash }}
+        AWS_ACCOUNT_ID: "123456789012"
+        AWS_REGION: "us-east-1"
+        ECR_REPO: "your-java-app"
+      ComputeType: BUILD_GENERAL1_SMALL
+      Image: "aws/codebuild/standard:6.0"
+
+  Deploy_Backend:
+    ActionType: ECSUpdateService
+    Inputs:
+      Cluster: ${{ if "ENV" == "prod" then "your-ecs-cluster-prod" else "your-ecs-cluster-dev" }}
+      Service: ${{ if "ENV" == "prod" then "your-ecs-service-prod" else "your-ecs-service-dev" }}
+      ForceNewDeployment: true
+      DesiredCount: 2
+      Image: ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}:${IMAGE_TAG}
